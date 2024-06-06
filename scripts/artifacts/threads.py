@@ -1,6 +1,6 @@
 # Threads (com.instagram.barcelona)
 # Author:  Gonçalo Paulino (gonssalu@proton.me)
-# Version: 0.0.1
+# Version: 0.0.2
 # 
 # Tested with the following versions:
 # 2024-06-04: Android 12, App: 332.0.0.34.109
@@ -16,7 +16,7 @@ __artifacts_v2__ = {
         "notes": "Will include accounts the user has logged out of. Parses the ID and username of each account; extracts the timestamps of the last activity by each account on the device.", 
         "author": "Gonçalo Paulino {GitHub/@gonssalu}",
         "version": "1.0.0",
-        "date": "2024-06-04",
+        "date": "2024-06-05",
         "category": "Threads",
         "requirements": "N/A",
         "paths": ('*/com.instagram.barcelona/shared_prefs/autobackupprefs.xml',
@@ -37,11 +37,11 @@ __artifacts_v2__ = {
     },
     "ThreadsRecentSearches": {
         "name": "Threads - Recent Searches",
-        "description": "Extract the user's recent searches in the logged-in account in Threads",
-        "notes": "Requires a logged-in account. More information on LINK", 
+        "description": "Extract the user's recent keyword and user searches from the logged-in account in Threads",
+        "notes": "Requires a logged-in account.", 
         "author": "Gonçalo Paulino {GitHub/@gonssalu}",
-        "version": "0.0.1",
-        "date": "2024-06-04",
+        "version": "1.0.0'",
+        "date": "2024-06-06",
         "category": "Threads",
         "requirements": "N/A",
         "paths": ('*/com.instagram.barcelona/shared_prefs/*_USER_PREFERENCES.xml'),
@@ -68,13 +68,6 @@ import xml.etree.ElementTree as ElementTree
 import html, json
 #from open_sqlite_db_readonly
 
-# Get the directory separator based on the file path
-def get_dir_separator(file_path):
-    if '\\' in file_path:
-        return '\\'
-    else:
-        return '/'
-
 def get_threads_account_history(files_found, report_folder, seeker, wrap_text, time_offset):
     
     user_map = []
@@ -82,7 +75,7 @@ def get_threads_account_history(files_found, report_folder, seeker, wrap_text, t
     for file_path in files_found:
         file_found = str(file_path)
         dir_sep = get_dir_separator(file_found)
-        file_name = file_found.rsplit(dir_sep, -1)[-1]
+        file_name = file_found.rsplit(dir_sep, 1)[-1]
         
         xmlTree = ElementTree.parse(file_found)
         root = xmlTree.getroot()
@@ -110,7 +103,7 @@ def get_threads_account_history(files_found, report_folder, seeker, wrap_text, t
             # If a timestamp was found, add it to the list
             if open_timestamp:
                 date_time_readable = convert_ts_int_to_utc(float(open_timestamp) / 1000.0).strftime("%Y/%m/%d %H:%M:%S %Z")
-                uid_timestamps.append({"uid": uid, "timestamp": open_timestamp, "date_time": date_time_readable, "timestamp_html": f'<span data-toggle="tooltip" data-placement="right" title="Timestamp: {open_timestamp}">{date_time_readable}</span>'})
+                uid_timestamps.append({"uid": uid, "timestamp": open_timestamp, "date_time": date_time_readable, "timestamp_html": timestamp_to_html(open_timestamp, date_time_readable)})
 
     # If we found any data, write it to the report
     if user_map or uid_timestamps:
@@ -118,6 +111,7 @@ def get_threads_account_history(files_found, report_folder, seeker, wrap_text, t
         data_rows = []
         tsv_rows = []
         
+        # Correlate the user data with the timestamps
         for user in user_map:
             uid = user['user_id']
             username = user['username']
@@ -146,23 +140,17 @@ def get_threads_account_history(files_found, report_folder, seeker, wrap_text, t
         report_name = 'ThreadsAccountHistory'
         category = 'Threads'
         description = "This artifact provides a list of accounts that have been used in Threads, including the last activity timestamp for each account.<br/>Includes accounts the user has logged out of."
+        source_file = str(files_found[0].split(dir_sep)[0])
         
-        report = ArtifactHtmlReport(f'{category} - {artifact_name}', category)
-        report.start_artifact_report(report_folder, f'{category} - {artifact_name}', description)
-        report.add_script()
-
-        report.write_minor_header("Sources")
-        for file_found in files_found:
-            file_path = file_found[4:] if file_found.startswith('\\\\?\\') else file_found
-            report.write_raw_html(f'<li class="list-group-item bg-white"><code>{str((file_path))}</code></li>')
-        report.write_raw_html('</ul><br/>')
+        report = init_report(artifact_name, category, description, report_folder)
+        print_sources_to_report(report, files_found)
         
         report.write_minor_header("Results")
-        report.write_artifact_data_table(headers, data_rows, str(files_found[0].split(dir_sep)[0]), html_escape=False, write_location=False)
+        report.write_artifact_data_table(headers, data_rows, source_file, html_escape=False, write_location=False)
         report.end_artifact_report()
         
         # Generate a TSV file
-        tsv(report_folder, headers, tsv_rows,  report_name)
+        tsv(report_folder, headers, tsv_rows, report_name)
         #timeline(report_folder, "Report Name", tsv_rows, headers)
 
     else:
@@ -173,7 +161,184 @@ def get_threads_account_details(files_found, report_folder, seeker, wrap_text, t
     pass
 
 def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, time_offset):
-    pass
+    
+    keywords = []
+    users = []
+    found = False
+    file_found = None
+    
+    # Process *_USER_PREFERENCES.xml files until something is found
+    for file_path in files_found:
+        file_found = str(file_path)
+        dir_sep = get_dir_separator(file_found)
+        
+        xmlTree = ElementTree.parse(file_found)
+        root = xmlTree.getroot()
+
+        file_name = file_found.rsplit(dir_sep, 1)[-1]
+        logfunc(f'Parsing {file_name}...')
+        
+        for child in root:
+            if child.attrib['name'] == "recent_keyword_searches_with_ts":
+                try:
+                    keywords = json.loads(html.unescape(child.text))["keywords"]
+                    keywords_len = len(keywords)
+                    found = True
+                    logfunc(f'Found and extracted {keywords_len} keyword(s)')
+                except:
+                    logfunc("Error parsing recent_keyword_searches_with_ts JSON")
+            if child.attrib['name'] == "recent_user_searches_with_ts":
+                try:
+                    users = json.loads(html.unescape(child.text))["users"]
+                    users_len = len(users)
+                    found = True
+                    logfunc(f'Found and extracted {users_len} user(s)')
+                except:
+                    logfunc("Error parsing recent_user_searches_with_ts JSON")
+        # If a file with recent searches was found, stop looking because only the logged-in account can have recent searches data
+        if found:
+            break
+    
+    report_name = 'ThreadsRecentSearches'
+    category = 'Threads'
+    source_file = clean_path(file_found)
+    
+    # If no data was found skip the reports
+    if not keywords and not users:
+        logfunc('No recent search data found in Threads artifacts')
+        return
+    
+    # If any keywords were found, write them to the report
+    if keywords:
+        keyword_data_rows = []
+        keyword_tsv_rows = []
+        keyword_headers = ["Timestamp", "Searched Keyword"]
+        for keyword in keywords:
+            timestamp = keyword["client_time"]
+            keyword = keyword["keyword"]
+            date_time_readable = convert_ts_int_to_utc(int(timestamp)).strftime("%Y/%m/%d %H:%M:%S %Z")
+            keyword_data_rows.append((timestamp_to_html(timestamp, date_time_readable), keyword["name"]))
+            keyword_tsv_rows.append((timestamp, keyword["name"]))
+            logfunc(f'Found keyword: {keyword["name"]} - Timestamp: {date_time_readable} ({timestamp})')
+       
+       
+       # Initialise the keyword searches report
+        artifact_name = 'Recent Searches - Keywords'
+        description = "This artifact provides a list of recent keyword searches from the logged-in account in Threads."
+        report = init_searches_report(artifact_name, category, description, report_folder, file_name, source_file)
+       
+        # Write the keyword data to the report
+        report.write_minor_header("Keyword Searches")
+        report.write_artifact_data_table(keyword_headers, keyword_data_rows, source_file, html_escape=False, write_location=False)
+        if users:
+            report.write_raw_html('<hr class="bg-light my-4"/>')
+        
+        report.end_artifact_report()
+        
+        # Generate a TSV file
+        tsv(report_folder, keyword_headers, keyword_tsv_rows, f'{report_name}_Keywords', source_file)
+        
+    if users:
+        users_data_rows = []
+        users_tsv_rows = []
+        users_headers = ["Timestamp", "Username", "Searched User ID", "Name", "Was Blocked?", "Followed User?", "User Was Following?"] # TODO: Add a link to visist profile with alert box maybege
+        for user in users:
+            timestamp = user["client_time"]
+            user = user["user"]
+            last_follow_status = user["last_follow_status"]
+            follow_status = user["follow_status"]
+            users_data_rows.append((timestamp_to_html(timestamp, date_time_readable), user["username"], user["id"], user["full_name"], bool_to_emoji(user["blocking"]), f'{last_follow_status} -> {follow_status}', bool_to_emoji(user["is_following_current_user"])))
+            users_tsv_rows.append((timestamp, user["username"], user["id"], user["full_name"], user["blocking"], f'{last_follow_status} -> {follow_status}', user["is_following_current_user"]))
+            logfunc(f'Found user: {user["username"]} ({user["id"]}) - Timestamp: {date_time_readable} ({timestamp}) - Was Blocked?: {user["blocking"]} - Followed User?: ' + f'{last_follow_status} -> {follow_status}' + f' - User Was Following?: {user["is_following_current_user"]}')
+        
+       
+       # Initialise the user searches report
+        artifact_name = 'Recent Searches - Users'
+        description = "This artifact provides a list of recent user searches from the logged-in account in Threads."
+        report = init_searches_report(artifact_name, category, description, report_folder, file_name, source_file)
+        
+        # Write the user searches data to the report
+        report.write_minor_header("User Searches")
+        report.write_lead_text("For a given row, the extracted data was true on the displayed timestamp.")
+        report.write_raw_html(RAW_HTML_RECENT_SEARCHES)
+        report.write_artifact_data_table(users_headers, users_data_rows, source_file, html_escape=False, write_location=False)
+        
+        # Generate a TSV file
+        tsv(report_folder, users_headers, users_tsv_rows, f'{report_name}_Users', source_file)
 
 def get_threads_logged_ip_addrs(files_found, report_folder, seeker, wrap_text, time_offset):
     pass
+
+# Get the directory separator based on the file path
+def get_dir_separator(file_path):
+    if '\\' in file_path:
+        return '\\'
+    else:
+        return '/'
+    
+# Convert a timestamp to HTML with a tooltip
+def timestamp_to_html(timestamp, date_time_readable):
+    return f'<span data-toggle="tooltip" data-placement="right" title="Timestamp: {timestamp}">{date_time_readable}</span>'
+
+# Convert a boolean to an HTML emoji
+def bool_to_emoji(value):
+    no_emoji = "&#10006; (No)"
+    yes_emoji = "&#9989; (Yes)"
+    return f'<span data-toggle="tooltip" data-placement="right" title="{value}">{yes_emoji if bool(value) else no_emoji}</span>'
+
+# Remove unneeded characters from the file path
+def clean_path(path):
+    return path[4:] if path.startswith('\\\\?\\') else path
+
+# Print sources to the report
+def print_sources_to_report(report, files_found):
+    if isinstance(files_found, str):
+        files_found = [files_found]
+        
+    report.write_minor_header("Source" + ("s" if len(files_found) > 1 else ""))
+    for file_found in files_found:
+        file_path = clean_path(file_found)
+        report.write_raw_html(f'<li class="list-group-item bg-white"><code>{str((file_path))}</code></li>')
+    report.write_raw_html('</ul><hr class="bg-light my-4"/>')
+
+# Initialise the report (Shared code for all artifacts)
+def init_report(artifact_name, category, description, report_folder) -> ArtifactHtmlReport:
+    report = ArtifactHtmlReport(f'{category} - {artifact_name}', category)
+    report.start_artifact_report(report_folder, f'{category} - {artifact_name}', description)
+    report.add_script()
+    return report
+
+def init_searches_report(artifact_name, category, description, report_folder, file_name, source_file) -> ArtifactHtmlReport:
+    report = init_report(artifact_name, category, description, report_folder)
+    report.write_lead_text("Logged-in account ID: " + file_name.split('_')[0])
+    print_sources_to_report(report, source_file)
+    return report
+
+RAW_HTML_RECENT_SEARCHES = '''
+<div class="row mb-4">
+  <div class="col-sm-4">
+    <div class="card bg-white h-100 d-flex flex-column" style="box-shadow: 0 2px 5px 0 rgba(0,0,0,0.16),0 2px 10px 0 rgba(0,0,0,0.12)">
+      <div class="card-body" style="overflow-y: hidden; height: auto">
+        <h5 class="card-title">Was Blocked?</h5>
+        <p class="card-text">Was the searched user blocked by the logged-in account?</p>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-4">
+    <div class="card bg-white h-100 d-flex flex-column" style="box-shadow: 0 2px 5px 0 rgba(0,0,0,0.16),0 2px 10px 0 rgba(0,0,0,0.12)">
+      <div class="card-body" style="overflow-y: hidden; height: auto">
+        <h5 class="card-title">Followed User?</h5>
+        <p class="card-text">Was the logged-in account following the user?<br/>The first value answers this question when the searched user popped up in the search results.<br/>The second value answers this question when the searched user's profile was clicked.</p>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-4">
+    <div class="card bg-white h-100 d-flex flex-column" style="box-shadow: 0 2px 5px 0 rgba(0,0,0,0.16),0 2px 10px 0 rgba(0,0,0,0.12)">
+      <div class="card-body" style="overflow-y: hidden; height: auto">
+        <h5 class="card-title">User Was Following?</h5>
+        <p class="card-text">Was the searched user following the logged-in account?</p>
+      </div>
+    </div>
+  </div>
+</div>
+'''

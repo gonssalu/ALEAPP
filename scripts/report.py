@@ -773,6 +773,7 @@ icon_mappings = \
     },
     'THREADS': {
         'ACCOUNT HISTORY': 'users',
+        'RECENT SEARCHES': 'search',
         'default': 'hash',
         '_mode': 'search',
     },
