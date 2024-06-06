@@ -771,6 +771,11 @@ icon_mappings = \
         'TEXT NOW - MESSAGES': 'message-square',
         'TEXT NOW - CONTACTS': 'user',
     },
+    'THREADS': {
+        'ACCOUNT HISTORY': 'users',
+        'default': 'hash',
+        '_mode': 'search',
+    },
     'TIKTOK': {  # TODO: align I & A artifacts with each other
         'TIKTOK CONTACTS': 'user',
         'TIKTOK MESSAGES': 'message-square',
