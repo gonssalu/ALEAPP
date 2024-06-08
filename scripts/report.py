@@ -774,6 +774,7 @@ icon_mappings = \
     'THREADS': {
         'ACCOUNT HISTORY': 'users',
         'RECENT SEARCHES': 'search',
+        'IP ADDRESSES': 'globe',
         'default': 'hash',
         '_mode': 'search',
     },

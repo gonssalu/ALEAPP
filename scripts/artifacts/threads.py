@@ -1,6 +1,6 @@
 # Threads (com.instagram.barcelona)
 # Author:  Gonçalo Paulino (gonssalu@proton.me)
-# Version: 0.0.2
+# Version: 0.0.3
 # 
 # Tested with the following versions:
 # 2024-06-04: Android 12, App: 332.0.0.34.109
@@ -48,13 +48,13 @@ __artifacts_v2__ = {
         "function": "get_threads_recent_searches"
     },
     "ThreadsLoggedIPAddresses": {
-        "name": "IP Addresses - Threads",
-        "description": "Extracts the IP addresses that were logged by Threads",
-        "notes": "More information on LINK", 
+        "name": "Threads - IP Addresses",
+        "description": "Extracts the IP addresses that were logged in Threads' HTTP request cache",
+        "notes": "Includes the associated user ID (when applicable) and the date of the request",
         "author": "Gonçalo Paulino {GitHub/@gonssalu}",
-        "version": "0.0.1",
-        "date": "2024-06-04",
-        "category": "Network",
+        "version": "1.0.0",
+        "date": "2024-06-08",
+        "category": "Threads",
         "requirements": "N/A",
         "paths": ('*/com.instagram.barcelona/cache/http_responses/*-resp_info_gzip.clean'),
         "function": "get_threads_logged_ip_addrs"
@@ -65,7 +65,8 @@ __artifacts_v2__ = {
 from scripts.artifact_report import ArtifactHtmlReport
 from scripts.ilapfuncs import logfunc, tsv, timeline, convert_ts_int_to_utc
 import xml.etree.ElementTree as ElementTree
-import html, json
+import html, json, gzip
+from datetime import datetime
 #from open_sqlite_db_readonly
 
 def get_threads_account_history(files_found, report_folder, seeker, wrap_text, time_offset):
@@ -102,7 +103,7 @@ def get_threads_account_history(files_found, report_folder, seeker, wrap_text, t
                     break
             # If a timestamp was found, add it to the list
             if open_timestamp:
-                date_time_readable = convert_ts_int_to_utc(float(open_timestamp) / 1000.0).strftime("%Y/%m/%d %H:%M:%S %Z")
+                date_time_readable = convert_ts_int_to_utc(float(open_timestamp) / 1000.0).strftime(TIMESTAMP_FORMAT)
                 uid_timestamps.append({"uid": uid, "timestamp": open_timestamp, "date_time": date_time_readable, "timestamp_html": timestamp_to_html(open_timestamp, date_time_readable)})
 
     # If we found any data, write it to the report
@@ -143,19 +144,18 @@ def get_threads_account_history(files_found, report_folder, seeker, wrap_text, t
         source_file = str(files_found[0].split(dir_sep)[0])
         
         report = init_report(artifact_name, category, description, report_folder)
-        print_sources_to_report(report, files_found)
         
         report.write_minor_header("Results")
         report.write_artifact_data_table(headers, data_rows, source_file, html_escape=False, write_location=False)
+        
+        print_sources_to_report(report, files_found)
         report.end_artifact_report()
         
         # Generate a TSV file
         tsv(report_folder, headers, tsv_rows, report_name)
-        #timeline(report_folder, "Report Name", tsv_rows, headers)
 
     else:
         logfunc('No user history data found in Threads artifacts')
-    return
 
 def get_threads_account_details(files_found, report_folder, seeker, wrap_text, time_offset):
     pass
@@ -216,7 +216,7 @@ def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, t
         for keyword in keywords:
             timestamp = keyword["client_time"]
             keyword = keyword["keyword"]
-            date_time_readable = convert_ts_int_to_utc(int(timestamp)).strftime("%Y/%m/%d %H:%M:%S %Z")
+            date_time_readable = convert_ts_int_to_utc(int(timestamp)).strftime(TIMESTAMP_FORMAT)
             keyword_data_rows.append((timestamp_to_html(timestamp, date_time_readable), keyword["name"]))
             keyword_tsv_rows.append((timestamp, keyword["name"]))
             logfunc(f'Found keyword: {keyword["name"]} - Timestamp: {date_time_readable} ({timestamp})')
@@ -226,7 +226,7 @@ def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, t
         artifact_name = 'Recent Searches - Keywords'
         description = "This artifact provides a list of recent keyword searches from the logged-in account in Threads."
         report = init_searches_report(artifact_name, category, description, report_folder, file_name, source_file)
-       
+        
         # Write the keyword data to the report
         report.write_minor_header("Keyword Searches")
         report.write_artifact_data_table(keyword_headers, keyword_data_rows, source_file, html_escape=False, write_location=False)
@@ -237,7 +237,8 @@ def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, t
         
         # Generate a TSV file
         tsv(report_folder, keyword_headers, keyword_tsv_rows, f'{report_name}_Keywords', source_file)
-        
+      
+    # If any users were found, write them to the report  
     if users:
         users_data_rows = []
         users_tsv_rows = []
@@ -263,11 +264,80 @@ def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, t
         report.write_raw_html(RAW_HTML_RECENT_SEARCHES)
         report.write_artifact_data_table(users_headers, users_data_rows, source_file, html_escape=False, write_location=False)
         
+        report.end_artifact_report()
+        
         # Generate a TSV file
         tsv(report_folder, users_headers, users_tsv_rows, f'{report_name}_Users', source_file)
 
 def get_threads_logged_ip_addrs(files_found, report_folder, seeker, wrap_text, time_offset):
-    pass
+    
+    ip_addresses = []
+    ip_addresses_tsv = []
+    files_used = []
+    
+    # Process all *_resp_info_gzip.clean files
+    for file_path in files_found:
+        file_found = str(file_path)
+        
+        dir_sep = get_dir_separator(file_found)
+        file_name = file_found.rsplit(dir_sep, 1)[-1]
+        
+        logfunc(f'Parsing {file_name}...')
+        
+        # Open the gzip files
+        try:
+            with gzip.open(file_path, 'rt') as gzip_file:
+                content = gzip_file.read()
+                resp_info = json.loads(content)
+                user_id = None
+                ip_addr = None
+                date = None
+                for header in resp_info["headers"]:
+                    if header["name"] == "Date":
+                        date = datetime.strptime(header["value"], "%a, %d %b %Y %H:%M:%S %Z").strftime(TIMESTAMP_FORMAT)
+                    if header["name"] == "ig-set-ig-u-ds-user-id":
+                        user_id = header["value"]
+                    if header["name"] == "X-FB-Client-IP-Forwarded":
+                        ip_addr = header["value"]
+                    if user_id and ip_addr and date:
+                        break
+                if not ip_addr:
+                    logfunc('No IP address found')
+                    continue
+                fixed_path = clean_path(file_path)
+                ip_addresses.append((user_id if user_id else "N/A", ip_addr_to_html(ip_addr), date if date else "Unknown"))
+                ip_addresses_tsv.append((user_id if user_id else "N/A", ip_addr, date if date else "Unknown", fixed_path))
+                files_used.append(fixed_path)
+                logfunc(f'Found IP address: {ip_addr} - Date: {date} - User ID: {user_id}')
+        except Exception as e:
+            logfunc(f'Error parsing gzip file: {type(e).__name__}')
+            logfunc(f'Error message: {str(e)}')
+    
+    if not ip_addresses:
+        logfunc('No IP addresses found in Threads artifacts')
+        return
+    
+    # Initialise the IP addresses report
+    report_name = 'ThreadsIPAddresses'
+    category = 'Threads'
+    artifact_name = 'IP Addresses'
+    description = "This artifact provides a list of IP addresses that were logged in Threads' HTTP request cache, including the associated user ID (when applicable) and the date of the request."
+    headers = ["User ID", "IP Address", "Date"]
+    
+    report = init_report(artifact_name, category, description, report_folder)
+    
+    # Write the IP address data to the report
+    report.write_minor_header("Results")
+    report.write_artifact_data_table(headers, ip_addresses, files_used[0].split(dir_sep)[0], html_escape=False, write_location=False)
+    
+    print_sources_to_report(report, files_used)
+        
+    report.end_artifact_report()
+    
+    # Generate a TSV file
+    headers.append("source file")
+    tsv(report_folder, headers, ip_addresses_tsv, report_name)
+    
 
 # Get the directory separator based on the file path
 def get_dir_separator(file_path):
@@ -286,20 +356,29 @@ def bool_to_emoji(value):
     yes_emoji = "&#9989; (Yes)"
     return f'<span data-toggle="tooltip" data-placement="right" title="{value}">{yes_emoji if bool(value) else no_emoji}</span>'
 
+# Convert an IP address to HTML with a tooltip
+def ip_addr_to_html(ip_addr):
+    return f'<a href="https://whatismyipaddress.com/ip/{ip_addr}" target="_blank" class="text-primary" data-toggle="tooltip" data-placement="right" title="Click to open IP lookup in new tab">{ip_addr}</a>'
+
 # Remove unneeded characters from the file path
 def clean_path(path):
     return path[4:] if path.startswith('\\\\?\\') else path
 
 # Print sources to the report
-def print_sources_to_report(report, files_found):
+def print_sources_to_report(report, files_found, is_after_results=False):
     if isinstance(files_found, str):
         files_found = [files_found]
-        
+    
+    if not is_after_results:
+        report.write_raw_html('<hr class="bg-light my-4"/>')
+    
     report.write_minor_header("Source" + ("s" if len(files_found) > 1 else ""))
+    report.write_raw_html(f'<ul class="list-group{"" if is_after_results else " mb-4"}">')    
     for file_found in files_found:
         file_path = clean_path(file_found)
         report.write_raw_html(f'<li class="list-group-item bg-white"><code>{str((file_path))}</code></li>')
-    report.write_raw_html('</ul><hr class="bg-light my-4"/>')
+        
+    report.write_raw_html('</ul><hr class="bg-light my-4"/>' if is_after_results else '</ul>')
 
 # Initialise the report (Shared code for all artifacts)
 def init_report(artifact_name, category, description, report_folder) -> ArtifactHtmlReport:
@@ -311,8 +390,10 @@ def init_report(artifact_name, category, description, report_folder) -> Artifact
 def init_searches_report(artifact_name, category, description, report_folder, file_name, source_file) -> ArtifactHtmlReport:
     report = init_report(artifact_name, category, description, report_folder)
     report.write_lead_text("Logged-in account ID: " + file_name.split('_')[0])
-    print_sources_to_report(report, source_file)
+    print_sources_to_report(report, source_file, True)
     return report
+
+TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S %Z" # "%d %b %Y %H:%M:%S %Z"
 
 RAW_HTML_RECENT_SEARCHES = '''
 <div class="row mb-4">
