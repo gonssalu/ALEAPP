@@ -63,7 +63,7 @@ __artifacts_v2__ = {
 
 
 from scripts.artifact_report import ArtifactHtmlReport
-from scripts.ilapfuncs import logfunc, tsv, timeline, convert_ts_int_to_utc
+from scripts.ilapfuncs import logfunc, tsv, timeline, convert_ts_int_to_utc, convert_utc_human_to_timezone
 import xml.etree.ElementTree as ElementTree
 import html, json, gzip
 from datetime import datetime
@@ -103,7 +103,7 @@ def get_threads_account_history(files_found, report_folder, seeker, wrap_text, t
                     break
             # If a timestamp was found, add it to the list
             if open_timestamp:
-                date_time_readable = convert_ts_int_to_utc(float(open_timestamp) / 1000.0).strftime(TIMESTAMP_FORMAT)
+                date_time_readable = convert_ts_int_to_date(float(open_timestamp) / 1000.0, time_offset).strftime(TIMESTAMP_FORMAT)
                 uid_timestamps.append({"uid": uid, "timestamp": open_timestamp, "date_time": date_time_readable, "timestamp_html": timestamp_to_html(open_timestamp, date_time_readable)})
 
     # If we found any data, write it to the report
@@ -216,7 +216,7 @@ def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, t
         for keyword in keywords:
             timestamp = keyword["client_time"]
             keyword = keyword["keyword"]
-            date_time_readable = convert_ts_int_to_utc(int(timestamp)).strftime(TIMESTAMP_FORMAT)
+            date_time_readable = convert_ts_int_to_date(int(timestamp), time_offset).strftime(TIMESTAMP_FORMAT)
             keyword_data_rows.append((timestamp_to_html(timestamp, date_time_readable), keyword["name"]))
             keyword_tsv_rows.append((timestamp, keyword["name"]))
             logfunc(f'Found keyword: {keyword["name"]} - Timestamp: {date_time_readable} ({timestamp})')
@@ -248,6 +248,7 @@ def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, t
             user = user["user"]
             last_follow_status = user["last_follow_status"]
             follow_status = user["follow_status"]
+            date_time_readable = convert_ts_int_to_date(int(timestamp), time_offset).strftime(TIMESTAMP_FORMAT)
             users_data_rows.append((timestamp_to_html(timestamp, date_time_readable), user["username"], user["id"], user["full_name"], bool_to_emoji(user["blocking"]), f'{last_follow_status} -> {follow_status}', bool_to_emoji(user["is_following_current_user"])))
             users_tsv_rows.append((timestamp, user["username"], user["id"], user["full_name"], user["blocking"], f'{last_follow_status} -> {follow_status}', user["is_following_current_user"]))
             logfunc(f'Found user: {user["username"]} ({user["id"]}) - Timestamp: {date_time_readable} ({timestamp}) - Was Blocked?: {user["blocking"]} - Followed User?: ' + f'{last_follow_status} -> {follow_status}' + f' - User Was Following?: {user["is_following_current_user"]}')
@@ -294,7 +295,7 @@ def get_threads_logged_ip_addrs(files_found, report_folder, seeker, wrap_text, t
                 date = None
                 for header in resp_info["headers"]:
                     if header["name"] == "Date":
-                        date = datetime.strptime(header["value"], "%a, %d %b %Y %H:%M:%S %Z").strftime(TIMESTAMP_FORMAT)
+                        date = convert_ts_int_to_date(datetime.strptime(header["value"], "%a, %d %b %Y %H:%M:%S %Z").timestamp(), time_offset).strftime(TIMESTAMP_FORMAT)
                     if header["name"] == "ig-set-ig-u-ds-user-id":
                         user_id = header["value"]
                     if header["name"] == "X-FB-Client-IP-Forwarded":
@@ -345,6 +346,10 @@ def get_dir_separator(file_path):
         return '\\'
     else:
         return '/'
+    
+# Convert a timestamp int to a datetime object in the case's timezone
+def convert_ts_int_to_date(ts, time_offset):
+    return convert_utc_human_to_timezone(convert_ts_int_to_utc(ts), time_offset)
     
 # Convert a timestamp to HTML with a tooltip
 def timestamp_to_html(timestamp, date_time_readable):
