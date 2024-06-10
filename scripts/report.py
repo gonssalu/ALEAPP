@@ -777,6 +777,7 @@ icon_mappings = \
         'IP ADDRESSES': 'globe',
         'RECENT SEARCHES - KEYWORDS': 'search',
         'RECENT SEARCHES': 'search',
+        'TIMESTAMP METRICS': 'clock',
         'default': 'hash',
         '_mode': 'search',
     },

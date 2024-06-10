@@ -35,6 +35,18 @@ __artifacts_v2__ = {
         "paths": ('*/com.instagram.barcelona/shared_prefs/com.instagram.barcelona_preferences.xml'),
         "function": "get_threads_account_details"
     },
+    "ThreadsTimestampMetrics": {
+        "name": "Threads - Timestamp Metrics",
+        "description": "Extracts the last app start timestamp, background app start timestamp, and foreground time spent since upgrade from Threads",
+        "notes": "", 
+        "author": "Gonçalo Paulino {GitHub/@gonssalu}",
+        "version": "1.0.0",
+        "date": "2024-06-10",
+        "category": "Threads",
+        "requirements": "N/A",
+        "paths": ('*/com.instagram.barcelona/shared_prefs/com.instagram.barcelona_preferences.xml'),
+        "function": "get_threads_timestamp_metrics"
+    },
     "ThreadsRecentSearches": {
         "name": "Threads - Recent Searches",
         "description": "Extract the user's recent keyword and user searches from the logged-in account in Threads",
@@ -163,6 +175,9 @@ def process_preferences_xml(files_found, process_acc_details):
     acc_details["file_path"] = clean_path(file_path);
     file_found = str(file_path)
     
+    if not process_acc_details:
+        acc_details["timestamps"] = {}
+    
     xmlTree = ElementTree.parse(file_found)
     root = xmlTree.getroot()
 
@@ -170,11 +185,11 @@ def process_preferences_xml(files_found, process_acc_details):
     for child in root:
         if not process_acc_details:
             if child.attrib['name'] == "last_app_start_timestamp":
-                acc_details["last_app_start"] = child.attrib['value']
+                acc_details["timestamps"]["last_app_start"] = child.attrib['value']
             if child.attrib['name'] == "all_start_latest_background_time":
-                acc_details["background_app_start"] = child.attrib['value']
+                acc_details["timestamps"]["background_app_start"] = child.attrib['value']
             if child.attrib['name'] == "foreground_timespent_since_upgrade":
-                acc_details["foreground_timespent"] = child.attrib['value']
+                acc_details["timestamps"]["foreground_timespent"] = child.attrib['value']
         else:
             if child.attrib['name'] == "user_access_map":
                 try:
@@ -234,7 +249,47 @@ def get_threads_account_details(files_found, report_folder, seeker, wrap_text, t
     headers = ["Artifact Timestamp", "Account ID", "Username", "Name", "Privacy"]
     tsv_rows = [[timestamp, account_id, username, name, privacy]]
     tsv(report_folder, headers, tsv_rows, report_name, file_path)
+
+def get_threads_timestamp_metrics(files_found, report_folder, seeker, wrap_text, time_offset):
+    acc_details = process_preferences_xml(files_found, False)
     
+    if not "timestamps" in acc_details or not acc_details["timestamps"]:
+        logfunc('No timestamp metrics were found')
+        return
+    
+    # Initialise the report
+    artifact_name = 'Timestamp Metrics'
+    report_name = 'ThreadsTimestampMetrics'
+    category = 'Threads'
+    description = "Extracts metric timestamps from the Threads application."
+    
+    report = init_report(artifact_name, category, description, report_folder)
+    
+    # Extract data from the JSON
+    foreground_app_start = acc_details["timestamps"]["last_app_start"]
+    background_app_start = acc_details["timestamps"]["background_app_start"]
+    foreground_time_spent = acc_details["timestamps"]["foreground_timespent"]
+    file_path = acc_details["file_path"]
+    
+    foreground_readable = convert_ts_int_to_date(int(foreground_app_start)/1000.0, time_offset).strftime(TIMESTAMP_FORMAT)
+    background_readable = convert_ts_int_to_date(int(background_app_start)/1000.0, time_offset).strftime(TIMESTAMP_FORMAT)
+    fts_readable = format_milliseconds(int(foreground_time_spent))
+    
+    # Log extracted data
+    logfunc(f'Last Foreground Start: {foreground_readable} ({foreground_app_start})')
+    logfunc(f'Last Background Start: {background_readable} ({background_app_start})')
+    logfunc(f'Time Spent in Foreground: {fts_readable} ({foreground_time_spent} milliseconds)')
+    
+    # Write to the report
+    raw_html = RAW_HTML_TIMESTAMP_METRICS.replace("%LAST_APP_START%", timestamp_to_html(foreground_app_start, foreground_readable)).replace("%BACKGROUND_APP_START%", timestamp_to_html(background_app_start, background_readable)).replace("%FOREGROUND_TIME_SPENT%", f'<span data-toggle="tooltip" data-placement="right" title="{foreground_time_spent} milliseconds">{fts_readable}</span>').replace("%SOURCE_FILE%", file_path)
+    report.write_raw_html(raw_html)
+    
+    report.end_artifact_report()
+    
+    # Generate a TSV file
+    headers = ["Last Foreground Start", "Last Background Start", "Time Spent in Foreground"]
+    tsv_rows = [[foreground_app_start, background_app_start, foreground_time_spent]]
+    tsv(report_folder, headers, tsv_rows, report_name, file_path)
 
 def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, time_offset):
     
@@ -436,6 +491,30 @@ def convert_status_to_readable(prefix: str,  status: str):
 def timestamp_to_html(timestamp, date_time_readable):
     return f'<span data-toggle="tooltip" data-placement="right" title="Timestamp: {timestamp}">{date_time_readable}</span>'
 
+def format_milliseconds(milliseconds):
+    days = milliseconds // 86400000
+    milliseconds %= 86400000
+    hours = milliseconds // 3600000
+    milliseconds %= 3600000
+    minutes = milliseconds // 60000
+    milliseconds %= 60000
+    seconds = milliseconds // 1000
+    milliseconds %= 1000
+
+    parts = []
+    if days > 0:
+        parts.append(f"{days} day{'s' if days != 1 else ''}")
+    if hours > 0:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if minutes > 0:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    if seconds > 0:
+        parts.append(f"{seconds} second{'s' if seconds != 1 else ''}")
+    if milliseconds > 0:
+        parts.append(f"{milliseconds} millisecond{'s' if milliseconds != 1 else ''}")
+
+    return ' '.join(parts)
+
 # Convert a boolean to an HTML emoji
 def bool_to_emoji(value):
     no_emoji = "&#10006; (No)"
@@ -600,7 +679,7 @@ RAW_HTML_ACCOUNT_DETAILS = '''
       </div>
 
       <p class="note note-primary mb-4">
-        The artifact date represents the last time this artifact's information was
+        <span class="font-weight-bold">Artifact Date</span> represents the last time this artifact's information was
         updated.
       </p>
     </div>
@@ -613,5 +692,45 @@ RAW_HTML_ACCOUNT_DETAILS = '''
       %USER_JSON%
     </div>
   </div>
+</div>
+'''
+
+RAW_HTML_TIMESTAMP_METRICS = '''
+<div class="card bg-white" style="padding: 20px">
+  <h2 class="card-title">Timestamps</h2>
+  <div class="table-responsive">
+    <table class="table table-bordered table-hover table-sm" width="70%">
+      <tbody>
+        <tr>
+          <th>Source File</th>
+          <td><code>%SOURCE_FILE%</code></td>
+        </tr>
+        <tr>
+          <th>Last Foreground Start</th>
+          <td>%LAST_APP_START%</td>
+        </tr>
+        <tr>
+          <th>Last Background Start</th>
+          <td>%BACKGROUND_APP_START%</td>
+        </tr>
+        <tr>
+          <th
+            data-toggle="tooltip"
+            data-placement="right"
+            title="The number of milliseconds Threads has spent in the foreground since the last update"
+            style="text-decoration: underline dotted"
+          >
+            Time Spent in Foreground
+          </th>
+          <td>%FOREGROUND_TIME_SPENT%</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note note-primary mb-4">
+    <span class="font-weight-bold">Time Spent in Foreground</span> represents
+    the number of milliseconds Threads has spent in the foreground since the last
+    update.
+  </p>
 </div>
 '''
