@@ -23,13 +23,13 @@ __artifacts_v2__ = {
                   '*/com.instagram.barcelona/shared_prefs/*_last_active_timestamp.xml'),
         "function": "get_threads_account_history",
     },
-    "ThreadsAccountDetails": {
-        "name": "Threads - Logged-in Account Details", # REVIEW: Should this be "Threads - Account Details"?
-        "description": "Extracts the account details of the current logged-in user in Threads",
+    "ThreadsLoggedInAccountDetails": {
+        "name": "Threads - Logged-in Account",
+        "description": "Extracts the account details of the current logged-in account in Threads",
         "notes": "Requires a logged-in account.", 
         "author": "Gonçalo Paulino {GitHub/@gonssalu}",
-        "version": "0.0.1",
-        "date": "2024-06-04",
+        "version": "1.0.0",
+        "date": "2024-06-10",
         "category": "Threads",
         "requirements": "N/A",
         "paths": ('*/com.instagram.barcelona/shared_prefs/com.instagram.barcelona_preferences.xml'),
@@ -157,8 +157,84 @@ def get_threads_account_history(files_found, report_folder, seeker, wrap_text, t
     else:
         logfunc('No user history data found in Threads artifacts')
 
+def process_preferences_xml(files_found, process_acc_details):
+    acc_details = {};
+    file_path = files_found[0];
+    acc_details["file_path"] = clean_path(file_path);
+    file_found = str(file_path)
+    
+    xmlTree = ElementTree.parse(file_found)
+    root = xmlTree.getroot()
+
+    # Process com.instagram.barcelona_preferences.xml
+    for child in root:
+        if not process_acc_details:
+            if child.attrib['name'] == "last_app_start_timestamp":
+                acc_details["last_app_start"] = child.attrib['value']
+            if child.attrib['name'] == "all_start_latest_background_time":
+                acc_details["background_app_start"] = child.attrib['value']
+            if child.attrib['name'] == "foreground_timespent_since_upgrade":
+                acc_details["foreground_timespent"] = child.attrib['value']
+        else:
+            if child.attrib['name'] == "user_access_map":
+                try:
+                    user_access_map = json.loads(html.unescape(child.text))[0]
+                    acc_details["user_map"] = user_access_map["user_info"]
+                    
+                    acc_details["user_map_ts"] = user_access_map["time_accessed"]
+                    break
+                except:
+                    logfunc("Error parsing user_access_map JSON")
+                        
+    return acc_details
+
 def get_threads_account_details(files_found, report_folder, seeker, wrap_text, time_offset):
-    pass
+    
+    acc_details = process_preferences_xml(files_found, True)
+    
+    if not "user_map" in acc_details:
+        logfunc('No logged-in account details found in Threads artifacts')
+        return
+    
+    # Initialise the report
+    artifact_name = 'Logged-in Account'
+    report_name = 'ThreadsLoggedInAccountDetails'
+    category = 'Threads'
+    description = "Extracts information about the logged-in user's account in Threads."
+    
+    report = init_report(artifact_name, category, description, report_folder)
+    
+    # Extract data from the JSON
+    timestamp = acc_details["user_map_ts"]
+    date_time_readable = convert_ts_int_to_date(int(timestamp)/1000.0, time_offset).strftime(TIMESTAMP_FORMAT)
+    account_id = acc_details["user_map"]["id"]
+    username = acc_details["user_map"]["username"]
+    name = acc_details["user_map"]["full_name"]
+    privacy = convert_status_to_readable("Privacy", acc_details["user_map"]["privacy_status"])
+    file_path = acc_details["file_path"]
+    user_json = json.dumps(acc_details["user_map"], indent=4, sort_keys=True)
+    
+    # Log extracted data
+    logfunc(f'Found account ID: {account_id}')
+    logfunc(f'Username: {username}')
+    logfunc(f'Name: {name}')
+    logfunc(f'Privacy: {privacy}')
+    logfunc(f'Timestamp: {date_time_readable} ({timestamp})')
+    
+    # Write to the report
+    raw_html = RAW_HTML_ACCOUNT_DETAILS.split("%USER_JSON%")
+    populated_html_1 = raw_html[0].replace("%TIMESTAMP%", timestamp_to_html(timestamp, date_time_readable)).replace("%ACC_ID%", account_id).replace("%USERNAME%", username).replace("%NAME%", name).replace("%PRIVACY%", privacy).replace("%SOURCE_FILE%", file_path)
+    report.write_raw_html(populated_html_1)
+    write_json_block_without_heading(report, user_json)
+    report.write_raw_html(raw_html[1])
+
+    report.end_artifact_report()
+    
+    # Generate a TSV file
+    headers = ["Artifact Timestamp", "Account ID", "Username", "Name", "Privacy"]
+    tsv_rows = [[timestamp, account_id, username, name, privacy]]
+    tsv(report_folder, headers, tsv_rows, report_name, file_path)
+    
 
 def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, time_offset):
     
@@ -246,8 +322,8 @@ def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, t
         for user in users:
             timestamp = user["client_time"]
             user = user["user"]
-            last_follow_status = user["last_follow_status"]
-            follow_status = user["follow_status"]
+            last_follow_status = convert_status_to_readable("Follow", user["last_follow_status"])
+            follow_status = convert_status_to_readable("Follow", user["follow_status"])
             date_time_readable = convert_ts_int_to_date(int(timestamp), time_offset).strftime(TIMESTAMP_FORMAT)
             users_data_rows.append((timestamp_to_html(timestamp, date_time_readable), user["username"], user["id"], user["full_name"], bool_to_emoji(user["blocking"]), f'{last_follow_status} -> {follow_status}', bool_to_emoji(user["is_following_current_user"])))
             users_tsv_rows.append((timestamp, user["username"], user["id"], user["full_name"], user["blocking"], f'{last_follow_status} -> {follow_status}', user["is_following_current_user"]))
@@ -262,7 +338,7 @@ def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, t
         # Write the user searches data to the report
         report.write_minor_header("User Searches")
         report.write_lead_text("For a given row, the extracted data was true on the displayed timestamp.")
-        report.write_raw_html(RAW_HTML_RECENT_SEARCHES)
+        report.write_raw_html(RAW_HTML_RECENT_USER_SEARCHES)
         report.write_artifact_data_table(users_headers, users_data_rows, source_file, html_escape=False, write_location=False)
         
         report.end_artifact_report()
@@ -350,7 +426,12 @@ def get_dir_separator(file_path):
 # Convert a timestamp int to a datetime object in the case's timezone
 def convert_ts_int_to_date(ts, time_offset):
     return convert_utc_human_to_timezone(convert_ts_int_to_utc(ts), time_offset)
-    
+
+# Convert a status to a readable format
+def convert_status_to_readable(prefix: str,  status: str):
+    full_prefix = f'{prefix}Status'
+    return status.replace(full_prefix, "") if full_prefix in status else status
+
 # Convert a timestamp to HTML with a tooltip
 def timestamp_to_html(timestamp, date_time_readable):
     return f'<span data-toggle="tooltip" data-placement="right" title="Timestamp: {timestamp}">{date_time_readable}</span>'
@@ -385,6 +466,12 @@ def print_sources_to_report(report, files_found, is_after_results=False):
         
     report.write_raw_html('</ul><hr class="bg-light my-4"/>' if is_after_results else '</ul>')
 
+def write_json_block_without_heading(report: ArtifactHtmlReport, json_data):
+    report.write_raw_html(f'<div class="jsonBlock mt-4">')
+    report.write_raw_html(f'<pre><code id="jsonCode">{json_data}</code></pre>')
+    report.write_raw_html('</div>')
+    report.write_raw_html('<script>hljs.highlightAll();</script>')
+
 # Initialise the report (Shared code for all artifacts)
 def init_report(artifact_name, category, description, report_folder) -> ArtifactHtmlReport:
     report = ArtifactHtmlReport(f'{category} - {artifact_name}', category)
@@ -400,7 +487,7 @@ def init_searches_report(artifact_name, category, description, report_folder, fi
 
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S %Z" # "%d %b %Y %H:%M:%S %Z"
 
-RAW_HTML_RECENT_SEARCHES = '''
+RAW_HTML_RECENT_USER_SEARCHES = '''
 <div class="row mb-4">
   <div class="col-sm-4">
     <div class="card bg-white h-100 d-flex flex-column" style="box-shadow: 0 2px 5px 0 rgba(0,0,0,0.16),0 2px 10px 0 rgba(0,0,0,0.12)">
@@ -424,6 +511,106 @@ RAW_HTML_RECENT_SEARCHES = '''
         <h5 class="card-title">User Was Following?</h5>
         <p class="card-text">Was the searched user following the logged-in account?</p>
       </div>
+    </div>
+  </div>
+</div>
+'''
+
+RAW_HTML_ACCOUNT_DETAILS = '''
+<div class="card bg-white" style="padding: 20px">
+  <h2 class="card-title">User Information</h2>
+
+  <ul class="nav nav-tabs" id="threadsAccTab" role="tablist">
+    <li class="nav-item waves-effect waves-light">
+      <a
+        class="nav-link active"
+        id="accDetails-tab"
+        data-toggle="tab"
+        href="#accDetails"
+        role="tab"
+        aria-controls="accDetails"
+        aria-selected="true"
+        >Details</a
+      >
+    </li>
+    <li class="nav-item waves-effect waves-light">
+      <a
+        class="nav-link"
+        id="userFullJson-list-tab"
+        data-toggle="tab"
+        href="#userFullJson"
+        role="tab"
+        aria-controls="userFullJson"
+        aria-selected="false"
+        >Full JSON</a
+      >
+    </li>
+  </ul>
+  <div class="tab-content" id="threadsAccTabContent">
+    <div
+      class="tab-pane fade active show"
+      id="accDetails"
+      role="tabpanel"
+      aria-labelledby="accDetails-tab"
+    >
+      <br />
+      <div class="table-responsive">
+        <table class="table table-bordered table-hover table-sm" width="70%">
+          <tbody>
+            <tr>
+              <th>Source File</th>
+              <td><code>%SOURCE_FILE%</code></td>
+            </tr>
+            <tr>
+              <th
+                data-toggle="tooltip"
+                data-placement="right"
+                title="The last time this artifact's information was updated"
+                style="text-decoration: underline dotted"
+              >
+                Artifact Date
+              </th>
+              <td>%TIMESTAMP%</td>
+            </tr>
+            <tr>
+              <th>ID</th>
+              <td>%ACC_ID%</td>
+            </tr>
+            <tr>
+              <th>Username</th>
+              <td>%USERNAME%</td>
+            </tr>
+            <tr>
+              <th>Name</th>
+              <td>%NAME%</td>
+            </tr>
+            <tr>
+              <th
+                data-toggle="tooltip"
+                data-placement="right"
+                title="Is the account public or private?"
+                style="text-decoration: underline dotted"
+              >
+                Account Privacy
+              </th>
+              <td>%PRIVACY%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="note note-primary mb-4">
+        The artifact date represents the last time this artifact's information was
+        updated.
+      </p>
+    </div>
+    <div
+      class="tab-pane fade"
+      id="userFullJson"
+      role="tabpanel"
+      aria-labelledby="userFullJson-tab"
+    >
+      %USER_JSON%
     </div>
   </div>
 </div>

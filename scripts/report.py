@@ -773,8 +773,10 @@ icon_mappings = \
     },
     'THREADS': {
         'ACCOUNT HISTORY': 'users',
-        'RECENT SEARCHES': 'search',
+        'LOGGED-IN ACCOUNT': 'user',
         'IP ADDRESSES': 'globe',
+        'RECENT SEARCHES - KEYWORDS': 'search',
+        'RECENT SEARCHES': 'search',
         'default': 'hash',
         '_mode': 'search',
     },
