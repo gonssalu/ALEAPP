@@ -226,6 +226,8 @@ def get_threads_account_details(files_found, report_folder, seeker, wrap_text, t
     username = acc_details["user_map"]["username"]
     name = acc_details["user_map"]["full_name"]
     privacy = convert_status_to_readable("Privacy", acc_details["user_map"]["privacy_status"])
+    follower_count = "N/A" if "follower_count" not in acc_details["user_map"] else acc_details["user_map"]["follower_count"]
+    following_count = "N/A" if "following_count" not in acc_details["user_map"] else acc_details["user_map"]["following_count"]
     file_path = acc_details["file_path"]
     user_json = json.dumps(acc_details["user_map"], indent=4, sort_keys=True)
     
@@ -234,11 +236,17 @@ def get_threads_account_details(files_found, report_folder, seeker, wrap_text, t
     logfunc(f'Username: {username}')
     logfunc(f'Name: {name}')
     logfunc(f'Privacy: {privacy}')
+    logfunc(f'Follower Count: {follower_count}')
+    logfunc(f'Following Count: {following_count}')
     logfunc(f'Timestamp: {date_time_readable} ({timestamp})')
     
     # Write to the report
     raw_html = RAW_HTML_ACCOUNT_DETAILS.split("%USER_JSON%")
     populated_html_1 = raw_html[0].replace("%TIMESTAMP%", timestamp_to_html(timestamp, date_time_readable)).replace("%ACC_ID%", account_id).replace("%USERNAME%", username).replace("%NAME%", name).replace("%PRIVACY%", privacy).replace("%SOURCE_FILE%", file_path)
+    
+    if follower_count != "N/A" or following_count != "N/A":
+        populated_html_1 = populated_html_1.replace("%FOLLOWER_INFO%", RAW_HTML_AD_FOLLOWER.replace("%FOLLOWER_COUNT%", str(follower_count)).replace("%FOLLOWING_COUNT%", str(following_count)))
+    
     report.write_raw_html(populated_html_1)
     write_json_block_without_heading(report, user_json)
     report.write_raw_html(raw_html[1])
@@ -246,8 +254,8 @@ def get_threads_account_details(files_found, report_folder, seeker, wrap_text, t
     report.end_artifact_report()
     
     # Generate a TSV file
-    headers = ["Artifact Timestamp", "Account ID", "Username", "Name", "Privacy"]
-    tsv_rows = [[timestamp, account_id, username, name, privacy]]
+    headers = ["Artifact Timestamp", "Account ID", "Username", "Name", "Privacy", "Follower Count", "Following Count"]
+    tsv_rows = [[timestamp, account_id, username, name, privacy, follower_count, following_count]]
     tsv(report_folder, headers, tsv_rows, report_name, file_path)
 
 def get_threads_timestamp_metrics(files_found, report_folder, seeker, wrap_text, time_offset):
@@ -674,6 +682,7 @@ RAW_HTML_ACCOUNT_DETAILS = '''
               </th>
               <td>%PRIVACY%</td>
             </tr>
+            %FOLLOWER_INFO%
           </tbody>
         </table>
       </div>
@@ -693,6 +702,31 @@ RAW_HTML_ACCOUNT_DETAILS = '''
     </div>
   </div>
 </div>
+'''
+
+RAW_HTML_AD_FOLLOWER = '''
+<tr>
+  <th
+    data-toggle="tooltip"
+    data-placement="right"
+    title="If 'N/A', no data was found"
+    style="text-decoration: underline dotted"
+  >
+    Follower Count
+  </th>
+  <td>%FOLLOWER_COUNT%</td>
+</tr>
+<tr>
+  <th
+    data-toggle="tooltip"
+    data-placement="right"
+    title="If 'N/A', no data was found"
+    style="text-decoration: underline dotted"
+  >
+    Following Count
+  </th>
+  <td>%FOLLOWING_COUNT%</td>
+</tr>
 '''
 
 RAW_HTML_TIMESTAMP_METRICS = '''
