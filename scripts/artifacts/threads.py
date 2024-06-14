@@ -37,14 +37,14 @@ __artifacts_v2__ = {
     },
     "ThreadsTimestampMetrics": {
         "name": "Threads - Timestamp Metrics",
-        "description": "Extracts the last app start timestamp, background app start timestamp, and foreground time spent since upgrade from Threads",
+        "description": "Extracts timestamps from app usage metrics in Threads. This includes the last time the app was opened, the last time it was in the background, the time spent in the foreground and open/close timestamps by account.",
         "notes": "", 
         "author": "Gonçalo Paulino {GitHub/@gonssalu}",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "date": "2024-06-10",
         "category": "Threads",
         "requirements": "N/A",
-        "paths": ('*/com.instagram.barcelona/shared_prefs/com.instagram.barcelona_preferences.xml'),
+        "paths": ('*/com.instagram.barcelona/shared_prefs/com.instagram.barcelona_preferences.xml', '*/com.instagram.barcelona/databases/time_in_app_*.db'),
         "function": "get_threads_timestamp_metrics"
     },
     "ThreadsRecentSearches": {
@@ -75,7 +75,7 @@ __artifacts_v2__ = {
 
 
 from scripts.artifact_report import ArtifactHtmlReport
-from scripts.ilapfuncs import logfunc, tsv, timeline, convert_ts_int_to_utc, convert_utc_human_to_timezone
+from scripts.ilapfuncs import logfunc, tsv, timeline, convert_ts_int_to_utc, convert_utc_human_to_timezone, open_sqlite_db_readonly
 import xml.etree.ElementTree as ElementTree
 import html, json, gzip
 from datetime import datetime
@@ -169,9 +169,8 @@ def get_threads_account_history(files_found, report_folder, seeker, wrap_text, t
     else:
         logfunc('No user history data found in Threads artifacts')
 
-def process_preferences_xml(files_found, process_acc_details):
+def process_preferences_xml(file_path, process_acc_details):
     acc_details = {};
-    file_path = files_found[0];
     acc_details["file_path"] = clean_path(file_path);
     file_found = str(file_path)
     
@@ -205,7 +204,7 @@ def process_preferences_xml(files_found, process_acc_details):
 
 def get_threads_account_details(files_found, report_folder, seeker, wrap_text, time_offset):
     
-    acc_details = process_preferences_xml(files_found, True)
+    acc_details = process_preferences_xml(files_found[0], True)
     
     if not "user_map" in acc_details:
         logfunc('No logged-in account details found in Threads artifacts')
@@ -259,45 +258,102 @@ def get_threads_account_details(files_found, report_folder, seeker, wrap_text, t
     tsv(report_folder, headers, tsv_rows, report_name, file_path)
 
 def get_threads_timestamp_metrics(files_found, report_folder, seeker, wrap_text, time_offset):
-    acc_details = process_preferences_xml(files_found, False)
+    acc_details = {}
+    usr_timestamps = []
+    usr_timestamps_sources = []
     
-    if not "timestamps" in acc_details or not acc_details["timestamps"]:
+    for file_found in files_found:
+        file_found_str = str(file_found)
+        dir_sep = get_dir_separator(file_found_str)
+        file_name = file_found_str.rsplit(dir_sep, 1)[-1]
+        
+        logfunc(f'Parsing {file_name}...')
+        if("com.instagram.barcelona_preferences.xml" == file_name):
+          acc_details = process_preferences_xml(files_found[0], False)
+        else:
+          uid = file_name.rsplit('_', 1)[-1].split('.')[0]
+          db = open_sqlite_db_readonly(file_found)
+
+          cursor = db.cursor()
+          cursor.execute('SELECT start_walltime, end_walltime FROM intervals WHERE start_event = 1 ORDER BY seq_num DESC')
+
+          all_rows = cursor.fetchall()
+          entries_retrieved = len(all_rows)
+          if entries_retrieved > 0:
+              logfunc(f'Found {entries_retrieved} timestamp(s) for user ID: {uid}')
+              for row in all_rows:
+                  opened_readable = convert_ts_int_to_date(int(row[0]), time_offset).strftime(TIMESTAMP_FORMAT)
+                  closed_readable = convert_ts_int_to_date(int(row[1]), time_offset).strftime(TIMESTAMP_FORMAT)
+                  usr_timestamps.append({"user_id": uid, "opened": row[0], "closed": row[1], "opened_readable": opened_readable, "closed_readable": closed_readable, "source_file": clean_path(file_found_str)})
+                  usr_timestamps_sources.append(clean_path(file_found_str))
+                  logfunc(f'App Opened: {opened_readable} ({row[0]}) - App Closed: {closed_readable} ({row[1]})')
+    
+    has_general_timestamps = "timestamps" in acc_details and acc_details["timestamps"]
+    if not has_general_timestamps and not usr_timestamps:
         logfunc('No timestamp metrics were found')
-        return
-    
+        
     # Initialise the report
     artifact_name = 'Timestamp Metrics'
     report_name = 'ThreadsTimestampMetrics'
     category = 'Threads'
-    description = "Extracts metric timestamps from the Threads application."
+    description = "Extracts timestamps from app usage metrics in Threads.<br/>This includes the last time the app was opened, the last time it was in the background, the time spent in the foreground and open/close timestamps by account."
     
     report = init_report(artifact_name, category, description, report_folder)
     
-    # Extract data from the JSON
-    foreground_app_start = acc_details["timestamps"]["last_app_start"]
-    background_app_start = acc_details["timestamps"]["background_app_start"]
-    foreground_time_spent = acc_details["timestamps"]["foreground_timespent"]
-    file_path = acc_details["file_path"]
-    
-    foreground_readable = convert_ts_int_to_date(int(foreground_app_start)/1000.0, time_offset).strftime(TIMESTAMP_FORMAT)
-    background_readable = convert_ts_int_to_date(int(background_app_start)/1000.0, time_offset).strftime(TIMESTAMP_FORMAT)
-    fts_readable = format_milliseconds(int(foreground_time_spent))
-    
-    # Log extracted data
-    logfunc(f'Last Foreground Start: {foreground_readable} ({foreground_app_start})')
-    logfunc(f'Last Background Start: {background_readable} ({background_app_start})')
-    logfunc(f'Time Spent in Foreground: {fts_readable} ({foreground_time_spent} milliseconds)')
-    
-    # Write to the report
-    raw_html = RAW_HTML_TIMESTAMP_METRICS.replace("%LAST_APP_START%", timestamp_to_html(foreground_app_start, foreground_readable)).replace("%BACKGROUND_APP_START%", timestamp_to_html(background_app_start, background_readable)).replace("%FOREGROUND_TIME_SPENT%", f'<span data-toggle="tooltip" data-placement="right" title="{foreground_time_spent} milliseconds">{fts_readable}</span>').replace("%SOURCE_FILE%", file_path)
-    report.write_raw_html(raw_html)
+    if has_general_timestamps:
+      # Extract data from the JSON
+      foreground_app_start = acc_details["timestamps"]["last_app_start"]
+      background_app_start = acc_details["timestamps"]["background_app_start"]
+      foreground_time_spent = acc_details["timestamps"]["foreground_timespent"]
+      file_path = acc_details["file_path"]
+      
+      foreground_readable = convert_ts_int_to_date(int(foreground_app_start)/1000.0, time_offset).strftime(TIMESTAMP_FORMAT)
+      background_readable = convert_ts_int_to_date(int(background_app_start)/1000.0, time_offset).strftime(TIMESTAMP_FORMAT)
+      fts_readable = format_milliseconds(int(foreground_time_spent))
+      
+      # Log extracted data
+      logfunc(f'Last Foreground Start: {foreground_readable} ({foreground_app_start})')
+      logfunc(f'Last Background Start: {background_readable} ({background_app_start})')
+      logfunc(f'Time Spent in Foreground: {fts_readable} ({foreground_time_spent} milliseconds)')
+      
+      # Write to the report
+      raw_html = RAW_HTML_TIMESTAMP_METRICS.replace("%LAST_APP_START%", timestamp_to_html(foreground_app_start, foreground_readable)).replace("%BACKGROUND_APP_START%", timestamp_to_html(background_app_start, background_readable)).replace("%FOREGROUND_TIME_SPENT%", f'<span data-toggle="tooltip" data-placement="right" title="{foreground_time_spent} milliseconds">{fts_readable}</span>').replace("%SOURCE_FILE%", file_path)
+      report.write_raw_html(raw_html)
+      
+      #Generate a TSV file
+      headers = ["Last Foreground Start", "Last Background Start", "Time Spent in Foreground"]
+      tsv_rows = [[foreground_app_start, background_app_start, foreground_time_spent]]
+      tsv(report_folder, headers, tsv_rows, f'{report_name}_GeneralUsage', file_path)
+      
+    if usr_timestamps:
+      # Write the user timestamps to the report
+      report.write_raw_html('<hr class="bg-light my-4"/>')
+      report.write_minor_header("App Usage Timestamps by User")
+      
+      # Sort the timestamps by the opened timestamp
+      usr_timestamps = sorted(usr_timestamps, key=lambda x: x["opened"])
+      
+      headers = ["User ID", "App Opened At", "App Closed At"]
+      data_rows = []
+      for usr_timestamp in usr_timestamps:
+          opened_tmstmp = usr_timestamp["opened"]
+          closed_tmstmp = usr_timestamp["closed"]
+          opened_readable = usr_timestamp["opened_readable"]
+          closed_readable = usr_timestamp["closed_readable"]
+          data_rows.append((usr_timestamp["user_id"], timestamp_to_html(opened_tmstmp, opened_readable), timestamp_to_html(closed_tmstmp, closed_readable)))
+          
+          # Generate a TSV file
+          tsv_rows.append((usr_timestamp["user_id"], opened_tmstmp, closed_tmstmp, usr_timestamp["source_file"]))
+      
+      report.write_artifact_data_table(headers, data_rows, usr_timestamps[0]["source_file"], html_escape=False, write_location=False)
+      
+      print_sources_to_report(report, usr_timestamps_sources, True)
+      # Generate a TSV file
+      headers.append("source file")
+      tsv(report_folder, headers, tsv_rows, f'{report_name}_UserUsage')
     
     report.end_artifact_report()
     
-    # Generate a TSV file
-    headers = ["Last Foreground Start", "Last Background Start", "Time Spent in Foreground"]
-    tsv_rows = [[foreground_app_start, background_app_start, foreground_time_spent]]
-    tsv(report_folder, headers, tsv_rows, report_name, file_path)
 
 def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, time_offset):
     
@@ -381,7 +437,7 @@ def get_threads_recent_searches(files_found, report_folder, seeker, wrap_text, t
     if users:
         users_data_rows = []
         users_tsv_rows = []
-        users_headers = ["Timestamp", "Username", "Searched User ID", "Name", "Was Blocked?", "Followed User?", "User Was Following?"] # TODO: Add a link to visist profile with alert box maybege
+        users_headers = ["Timestamp", "Username", "Searched User ID", "Name", "Was Blocked?", "Followed User?", "User Was Following?"]
         for user in users:
             timestamp = user["client_time"]
             user = user["user"]
@@ -731,7 +787,7 @@ RAW_HTML_AD_FOLLOWER = '''
 
 RAW_HTML_TIMESTAMP_METRICS = '''
 <div class="card bg-white" style="padding: 20px">
-  <h2 class="card-title">Timestamps</h2>
+  <h3 class="card-title h3">Overall Timestamps</h3>
   <div class="table-responsive">
     <table class="table table-bordered table-hover table-sm" width="70%">
       <tbody>
