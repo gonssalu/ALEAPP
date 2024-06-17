@@ -279,13 +279,13 @@ def get_threads_timestamp_metrics(files_found, report_folder, seeker, wrap_text,
 
           all_rows = cursor.fetchall()
           entries_retrieved = len(all_rows)
+          usr_timestamps_sources.append(clean_path(file_found_str))
           if entries_retrieved > 0:
               logfunc(f'Found {entries_retrieved} timestamp(s) for user ID: {uid}')
               for row in all_rows:
                   opened_readable = convert_ts_int_to_date(int(row[0]), time_offset).strftime(TIMESTAMP_FORMAT)
                   closed_readable = convert_ts_int_to_date(int(row[1]), time_offset).strftime(TIMESTAMP_FORMAT)
                   usr_timestamps.append({"user_id": uid, "opened": row[0], "closed": row[1], "opened_readable": opened_readable, "closed_readable": closed_readable, "source_file": clean_path(file_found_str)})
-                  usr_timestamps_sources.append(clean_path(file_found_str))
                   logfunc(f'App Opened: {opened_readable} ({row[0]}) - App Closed: {closed_readable} ({row[1]})')
     
     has_general_timestamps = "timestamps" in acc_details and acc_details["timestamps"]
@@ -347,7 +347,7 @@ def get_threads_timestamp_metrics(files_found, report_folder, seeker, wrap_text,
       
       report.write_artifact_data_table(headers, data_rows, usr_timestamps[0]["source_file"], html_escape=False, write_location=False)
       
-      print_sources_to_report(report, usr_timestamps_sources, True)
+      print_sources_to_report(report, usr_timestamps_sources)
       # Generate a TSV file
       headers.append("source file")
       tsv(report_folder, headers, tsv_rows, f'{report_name}_UserUsage')
